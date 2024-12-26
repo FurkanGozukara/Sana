@@ -17,6 +17,7 @@
 import logging
 import os
 import re
+import sys
 from collections import OrderedDict
 from datetime import datetime
 
@@ -43,7 +44,10 @@ def get_root_logger(
         :obj:`logging.Logger`: The obtained logger
     """
     if log_file is None:
-        log_file = "/dev/null"
+        if sys.platform == 'win32':
+            log_file = 'NUL'  # Windows equivalent of /dev/null
+        else:
+            log_file = '/dev/null'
     logger = get_logger(name=name, log_file=log_file, log_level=log_level, timezone=timezone)
     return logger
 
@@ -105,6 +109,10 @@ def get_logger(name, log_file=None, log_level=logging.INFO, timezone="UTC"):
 
     # only rank 0 will add a FileHandler
     if rank == 0 and log_file is not None:
+        # Ensure the directory exists
+        log_dir = os.path.dirname(log_file)
+        if log_dir and not os.path.exists(log_dir):
+            os.makedirs(log_dir)
         file_handler = logging.FileHandler(log_file, "a")
         handlers.append(file_handler)
 
@@ -141,20 +149,6 @@ def rename_file_with_creation_time(file_path):
     os.rename(file_path, new_file_path)
     # print(f"File renamed to: {new_file_path}")
     return new_file_path
-
-
-class TimezoneFormatter(logging.Formatter):
-    def __init__(self, fmt=None, datefmt=None, tz=None):
-        super().__init__(fmt, datefmt)
-        self.tz = pytz.timezone(tz) if tz else None
-
-    def formatTime(self, record, datefmt=None):
-        dt = datetime.fromtimestamp(record.created, self.tz)
-        if datefmt:
-            s = dt.strftime(datefmt)
-        else:
-            s = dt.isoformat()
-        return s
 
 
 class LogBuffer:

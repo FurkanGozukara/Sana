@@ -15,7 +15,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # This file is copied from https://github.com/NVlabs/VILA/tree/main/llava/wids
-import fcntl
 import os
 import shutil
 import sys
@@ -23,6 +22,15 @@ import time
 from collections import deque
 from datetime import datetime
 from urllib.parse import urlparse
+
+# Conditional import for fcntl
+if os.name == 'posix':
+    import fcntl
+else:
+    class fcntl:
+        @staticmethod
+        def flock(fd, operation):
+            pass  # Dummy implementation for Windows
 
 recent_downloads = deque(maxlen=1000)
 
@@ -41,11 +49,13 @@ class ULockFile:
 
     def __enter__(self):
         self.lockfile = open(self.lockfile_path, "w")
-        fcntl.flock(self.lockfile.fileno(), fcntl.LOCK_EX)
+        if os.name == 'posix':
+            fcntl.flock(self.lockfile.fileno(), fcntl.LOCK_EX)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        fcntl.flock(self.lockfile.fileno(), fcntl.LOCK_UN)
+        if os.name == 'posix':
+            fcntl.flock(self.lockfile.fileno(), fcntl.LOCK_UN)
         self.lockfile.close()
         self.lockfile = None
         try:
@@ -96,9 +106,6 @@ default_cmds = {
 }
 
 
-# TODO(ligeng): change HTTPS download to python requests library
-
-
 def download_file_no_log(remote, local, handlers=default_cmds):
     """Download a file from a remote url to a local path.
     The remote url can be a pipe: url, in which case the remainder of
@@ -145,30 +152,33 @@ def download_file(remote, local, handlers=default_cmds, verbose=False):
 
 
 def download_and_open(remote, local, mode="rb", handlers=default_cmds, verbose=False):
-    with ULockFile(local + ".lock"):
-        if os.path.exists(remote):
-            # print("enter1", remote, local, mode)
-            result = open(remote, mode)
+    if os.name == 'posix':
+        with ULockFile(local + ".lock"):
+            return _download_and_open_impl(remote, local, mode, handlers, verbose)
+    else:
+        # For Windows, we skip the file locking mechanism
+        return _download_and_open_impl(remote, local, mode, handlers, verbose)
+
+def _download_and_open_impl(remote, local, mode, handlers, verbose):
+    if os.path.exists(remote):
+        result = open(remote, mode)
+    else:
+        if not os.path.exists(local):
+            if verbose:
+                print("downloading", remote, "to", local, file=sys.stderr)
+            download_file(remote, local, handlers=handlers)
         else:
-            # print("enter2", remote, local, mode)
-            if not os.path.exists(local):
-                if verbose:
-                    print("downloading", remote, "to", local, file=sys.stderr)
-                download_file(remote, local, handlers=handlers)
-            else:
-                if verbose:
-                    print("using cached", local, file=sys.stderr)
-            result = open(local, mode)
+            if verbose:
+                print("using cached", local, file=sys.stderr)
+        result = open(local, mode)
 
-        # input()
-
-        if open_objects is not None:
-            for k, v in list(open_objects.items()):
-                if v.closed:
-                    del open_objects[k]
-            if len(open_objects) > max_open_objects:
-                raise RuntimeError("Too many open objects")
-            current_time = datetime.now().strftime("%Y%m%d%H%M%S")
-            key = tuple(str(x) for x in [remote, local, mode, current_time])
-            open_objects[key] = result
-        return result
+    if open_objects is not None:
+        for k, v in list(open_objects.items()):
+            if v.closed:
+                del open_objects[k]
+        if len(open_objects) > max_open_objects:
+            raise RuntimeError("Too many open objects")
+        current_time = datetime.now().strftime("%Y%m%d%H%M%S")
+        key = tuple(str(x) for x in [remote, local, mode, current_time])
+        open_objects[key] = result
+    return result

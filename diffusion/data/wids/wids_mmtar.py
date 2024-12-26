@@ -16,11 +16,22 @@
 
 # This file is copied from https://github.com/NVlabs/VILA/tree/main/llava/wids
 import collections
-import fcntl
 import io
 import mmap
 import os
 import struct
+
+# Conditional import for fcntl
+if os.name == 'posix':
+    import fcntl
+else:
+    class fcntl:
+        @staticmethod
+        def flock(fd, operation):
+            pass  # Dummy implementation for Windows
+        LOCK_SH = 0
+        LOCK_EX = 0
+        LOCK_NB = 0
 
 TarHeader = collections.namedtuple(
     "TarHeader",
@@ -152,17 +163,21 @@ def keep_while_reading(fname, fd, phase, delay=0.0):
     assert delay == 0.0, "delay not implemented"
     if fd < 0 or fname is None:
         return
-    if phase == "start":
-        fcntl.flock(fd, fcntl.LOCK_SH)
-    elif phase == "end":
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            os.unlink(fname)
-        except FileNotFoundError:
-            # someone else deleted it already
-            pass
-        except BlockingIOError:
-            # we couldn't get an exclusive lock, so someone else is still reading
-            pass
+    if os.name == 'posix':
+        if phase == "start":
+            fcntl.flock(fd, fcntl.LOCK_SH)
+        elif phase == "end":
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                os.unlink(fname)
+            except FileNotFoundError:
+                # someone else deleted it already
+                pass
+            except BlockingIOError:
+                # we couldn't get an exclusive lock, so someone else is still reading
+                pass
+        else:
+            raise ValueError(f"Unknown phase {phase}")
     else:
-        raise ValueError(f"Unknown phase {phase}")
+        # Windows implementation (no-op for now)
+        pass
