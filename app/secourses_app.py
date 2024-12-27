@@ -376,7 +376,7 @@ def change_model(model_choice):
         return f"Using {model_choice} model", default_width, default_height
 
 title = f"""
-SANA APP V5 : Exclusive to SECourses : https://www.patreon.com/posts/116474081
+SANA APP V6 : Exclusive to SECourses : https://www.patreon.com/posts/116474081
 """
 
 examples = [
