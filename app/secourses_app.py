@@ -348,14 +348,28 @@ def change_model(model_choice):
         args.config = config_path
         args.model_path = model_path
 
-        # Load the new model
+        # Enhanced cleanup
         if torch.cuda.is_available():
             if pipe is not None:
+                # Explicitly cleanup VAE
+                if hasattr(pipe, 'vae'):
+                    pipe.vae = pipe.vae.cpu()
+                    del pipe.vae
+                # Explicitly cleanup model
+                if hasattr(pipe, 'model'):
+                    pipe.model = pipe.model.cpu()
+                    del pipe.model
                 del pipe
                 torch.cuda.empty_cache()
-            pipe = SanaPipeline(args.config)
-            pipe.from_pretrained(args.model_path)
-            pipe.register_progress_bar(gr.Progress())
+                import gc
+                gc.collect()
+
+            try:
+                pipe = SanaPipeline(args.config)
+                pipe.from_pretrained(args.model_path)
+                pipe.register_progress_bar(gr.Progress())
+            except Exception as e:
+                return f"Error loading model: {str(e)}", default_width, default_height
 
         return f"Using {model_choice} model", default_width, default_height
     else:

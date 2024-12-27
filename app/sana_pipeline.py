@@ -1,29 +1,16 @@
-# Copyright 2024 NVIDIA CORPORATION & AFFILIATES
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-# SPDX-License-Identifier: Apache-2.0
 import argparse
 import warnings
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
+import gc
+import psutil
+import os
 
 import pyrallis
 import torch
 import torch.nn as nn
 
-warnings.filterwarnings("ignore")  # ignore warning
-
+warnings.filterwarnings("ignore")
 
 from diffusion import DPMS, FlowEuler
 from diffusion.data.datasets.utils import ASPECT_RATIO_512_TEST, ASPECT_RATIO_1024_TEST, ASPECT_RATIO_2048_TEST
@@ -31,9 +18,16 @@ from diffusion.model.builder import build_model, get_tokenizer_and_text_encoder,
 from diffusion.model.utils import get_weight_dtype, prepare_prompt_ar, resize_and_crop_tensor
 from diffusion.utils.config import SanaConfig, model_init_config
 from diffusion.utils.logger import get_root_logger
-
-# from diffusion.utils.misc import read_config
 from tools.download import find_model
+
+
+def print_memory_usage(prefix=""):
+    process = psutil.Process(os.getpid())
+    gpu_mem = torch.cuda.memory_allocated() / 1024**2
+    gpu_mem_reserved = torch.cuda.memory_reserved() / 1024**2
+    ram_mem = process.memory_info().rss / 1024**2
+    print(f"{prefix} GPU Memory used: {gpu_mem:.2f}MB (Reserved: {gpu_mem_reserved:.2f}MB)")
+    print(f"{prefix} RAM Memory used: {ram_mem:.2f}MB")
 
 
 def guidance_type_select(default_guidance_type, pag_scale, attn_type):
@@ -46,7 +40,6 @@ def guidance_type_select(default_guidance_type, pag_scale, attn_type):
 
 
 def classify_height_width_bin(height: int, width: int, ratios: dict) -> Tuple[int, int]:
-    """Returns binned height and width."""
     ar = float(height / width)
     closest_ratio = min(ratios.keys(), key=lambda ratio: abs(float(ratio) - ar))
     default_hw = ratios[closest_ratio]
@@ -55,7 +48,7 @@ def classify_height_width_bin(height: int, width: int, ratios: dict) -> Tuple[in
 
 @dataclass
 class SanaInference(SanaConfig):
-    config: Optional[str] = "configs/sana_config/1024ms/Sana_1600M_img1024.yaml"  # config
+    config: Optional[str] = "configs/sana_config/1024ms/Sana_1600M_img1024.yaml"
     model_path: str = field(
         default="output/Sana_D20/SANA.pth", metadata={"help": "Path to the model file (positional)"}
     )
@@ -74,20 +67,14 @@ class SanaInference(SanaConfig):
 
 
 class SanaPipeline(nn.Module):
-    def __init__(
-        self,
-        config: Optional[str] = "configs/sana_config/1024ms/Sana_1600M_img1024.yaml",
-    ):
+    def __init__(self, config: Optional[str] = "configs/sana_config/1024ms/Sana_1600M_img1024.yaml"):
         super().__init__()
         config = pyrallis.load(SanaInference, open(config))
         self.args = self.config = config
 
-        # set some hyper-parameters
         self.image_size = self.config.model.image_size
-
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        logger = get_root_logger()
-        self.logger = logger
+        self.logger = get_root_logger()
         self.progress_fn = lambda progress, desc: None
 
         self.latent_size = self.image_size // config.vae.vae_downsample_rate
@@ -95,31 +82,65 @@ class SanaPipeline(nn.Module):
         self.flow_shift = config.scheduler.flow_shift
         guidance_type = "classifier-free_PAG"
 
-        weight_dtype = get_weight_dtype(config.model.mixed_precision)
-        self.weight_dtype = weight_dtype
+        self.weight_dtype = get_weight_dtype(config.model.mixed_precision)
         self.vae_dtype = get_weight_dtype(config.vae.weight_dtype)
 
         self.base_ratios = eval(f"ASPECT_RATIO_{self.image_size}_TEST")
         self.vis_sampler = self.config.scheduler.vis_sampler
-        logger.info(f"Sampler {self.vis_sampler}, flow_shift: {self.flow_shift}")
+        self.logger.info(f"Sampler {self.vis_sampler}, flow_shift: {self.flow_shift}")
+        
         self.guidance_type = guidance_type_select(guidance_type, self.args.pag_scale, config.model.attn_type)
-        logger.info(f"Inference with {self.weight_dtype}, PAG guidance layer: {self.config.model.pag_applied_layers}")
+        self.logger.info(f"Inference with {self.weight_dtype}, PAG guidance layer: {self.config.model.pag_applied_layers}")
 
-        # 1. build vae and text encoder
+        print_memory_usage("Initial memory state:")
+
         self.vae = self.build_vae(config.vae)
+        self.vae = self.vae.cpu()
+        print_memory_usage("After VAE build and CPU move:")
+
         self.tokenizer, self.text_encoder = self.build_text_encoder(config.text_encoder)
+        print_memory_usage("After text encoder build:")
 
-        # 2. build Sana model
         self.model = self.build_sana_model(config).to(self.device)
+        print_memory_usage("After model build:")
 
-        # 3. pre-compute null embedding
         with torch.no_grad():
             null_caption_token = self.tokenizer(
                 "", max_length=self.max_sequence_length, padding="max_length", truncation=True, return_tensors="pt"
             ).to(self.device)
-            self.null_caption_embs = self.text_encoder(null_caption_token.input_ids, null_caption_token.attention_mask)[
-                0
-            ]
+            self.null_caption_embs = self.text_encoder(null_caption_token.input_ids, null_caption_token.attention_mask)[0]
+
+    def cleanup_memory(self):
+        if hasattr(self, 'model'):
+            del self.model
+        if hasattr(self, 'vae'):
+            del self.vae
+        if hasattr(self, 'text_encoder'):
+            del self.text_encoder
+        
+        torch.cuda.empty_cache()
+        gc.collect()
+        print_memory_usage("After cleanup:")
+
+    def to_device(self, device):
+        print(f"Moving models to {device}")
+        print_memory_usage("Before moving:")
+        
+        torch.cuda.empty_cache()
+        gc.collect()
+        
+        self.device = device
+        self.model = self.model.to(device)
+        self.text_encoder = self.text_encoder.to(device)
+        
+        print_memory_usage("After moving:")
+        return self
+
+    def cpu(self):
+        return self.to_device('cpu')
+
+    def cuda(self):
+        return self.to_device('cuda')
 
     def build_vae(self, config):
         vae = get_vae(config.vae_type, config.vae_pretrained, self.device).to(self.vae_dtype)
@@ -130,7 +151,6 @@ class SanaPipeline(nn.Module):
         return tokenizer, text_encoder
 
     def build_sana_model(self, config):
-        # model setting
         model_kwargs = model_init_config(config, latent_size=self.latent_size)
         model = build_model(
             config.model.model,
@@ -181,7 +201,6 @@ class SanaPipeline(nn.Module):
         )
         self.guidance_type = guidance_type_select(self.guidance_type, pag_guidance_scale, self.config.model.attn_type)
 
-        # 1. pre-compute negative embedding
         if negative_prompt != "":
             null_caption_token = self.tokenizer(
                 negative_prompt,
@@ -190,9 +209,7 @@ class SanaPipeline(nn.Module):
                 truncation=True,
                 return_tensors="pt",
             ).to(self.device)
-            self.null_caption_embs = self.text_encoder(null_caption_token.input_ids, null_caption_token.attention_mask)[
-                0
-            ]
+            self.null_caption_embs = self.text_encoder(null_caption_token.input_ids, null_caption_token.attention_mask)[0]
 
         if prompt is None:
             prompt = [""]
@@ -200,7 +217,6 @@ class SanaPipeline(nn.Module):
         samples = []
 
         for prompt in prompts:
-            # data prepare
             prompts, hw, ar = (
                 [],
                 torch.tensor([[self.image_size, self.image_size]], dtype=torch.float, device=self.device).repeat(
@@ -213,7 +229,6 @@ class SanaPipeline(nn.Module):
                 prompts.append(prepare_prompt_ar(prompt, self.base_ratios, device=self.device, show=False)[0].strip())
 
             with torch.no_grad():
-                # prepare text feature
                 if not self.config.text_encoder.chi_prompt:
                     max_length_all = self.config.text_encoder.model_max_length
                     prompts_all = prompts
@@ -221,9 +236,7 @@ class SanaPipeline(nn.Module):
                     chi_prompt = "\n".join(self.config.text_encoder.chi_prompt)
                     prompts_all = [chi_prompt + prompt for prompt in prompts]
                     num_chi_prompt_tokens = len(self.tokenizer.encode(chi_prompt))
-                    max_length_all = (
-                        num_chi_prompt_tokens + self.config.text_encoder.model_max_length - 2
-                    )  # magic number 2: [bos], [_]
+                    max_length_all = num_chi_prompt_tokens + self.config.text_encoder.model_max_length - 2
 
                 caption_token = self.tokenizer(
                     prompts_all,
@@ -232,6 +245,7 @@ class SanaPipeline(nn.Module):
                     truncation=True,
                     return_tensors="pt",
                 ).to(device=self.device)
+                
                 select_index = [0] + list(range(-self.config.text_encoder.model_max_length + 1, 0))
                 caption_embs = self.text_encoder(caption_token.input_ids, caption_token.attention_mask)[0][:, None][
                     :, :, select_index
@@ -251,7 +265,11 @@ class SanaPipeline(nn.Module):
                     )
                 else:
                     z = latents.to(self.device)
+                    
                 model_kwargs = dict(data_info={"img_hw": hw, "aspect_ratio": ar}, mask=emb_masks)
+                
+                print_memory_usage("Before sampling:")
+                
                 if self.vis_sampler == "flow_euler":
                     flow_solver = FlowEuler(
                         self.model,
@@ -260,10 +278,7 @@ class SanaPipeline(nn.Module):
                         cfg_scale=guidance_scale,
                         model_kwargs=model_kwargs,
                     )
-                    sample = flow_solver.sample(
-                        z,
-                        steps=num_inference_steps,
-                    )
+                    sample = flow_solver.sample(z, steps=num_inference_steps)
                 elif self.vis_sampler == "flow_dpm-solver":
                     scheduler = DPMS(
                         self.model,
@@ -287,9 +302,39 @@ class SanaPipeline(nn.Module):
                         flow_shift=self.flow_shift,
                     )
 
+            print_memory_usage("Before VAE decode:")
+            
+            print("Moving pipeline to CPU...")
+            self.model = self.model.cpu()
+            torch.cuda.empty_cache()
+            gc.collect()
+            
+            print_memory_usage("After moving pipeline to CPU:")
+            
+            print("Moving VAE to GPU...")
+            self.vae = self.vae.to(self.device)
+            
+            print_memory_usage("After moving VAE to GPU:")
+            
             sample = sample.to(self.vae_dtype)
             with torch.no_grad():
+                print("Starting VAE decode...")
                 sample = vae_decode(self.config.vae.vae_type, self.vae, sample)
+                print("VAE decode completed")
+            
+            print_memory_usage("After VAE decode:")
+            
+            print("Moving VAE to CPU...")
+            self.vae = self.vae.cpu()
+            torch.cuda.empty_cache()
+            gc.collect()
+            
+            print_memory_usage("After moving VAE to CPU:")
+            
+            print("Moving pipeline back to GPU...")
+            self.model = self.model.to(self.device)
+            
+            print_memory_usage("After moving pipeline back to GPU:")
 
             sample = resize_and_crop_tensor(sample, self.ori_width, self.ori_height)
             samples.append(sample)

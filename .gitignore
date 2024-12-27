@@ -19,7 +19,7 @@ data/*
 *.bin
 *.safetensors
 *.pkl
-
+.vs
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
