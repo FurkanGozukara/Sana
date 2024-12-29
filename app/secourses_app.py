@@ -37,6 +37,34 @@ DEMO_PORT = int(os.getenv("DEMO_PORT", "15432"))
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+ASPECT_RATIOS = {
+    "1:1":  (1024, 1024),
+    "4:3":  (1152, 896),
+    "3:4":  (896, 1152),
+    "3:2":  (1216, 832),
+    "2:3":  (832, 1216),
+    "16:9": (1344, 768),
+    "9:16": (768, 1344),
+    "21:9": (1536, 640),
+    "9:21": (640, 1536),
+    "4:5":  (896, 1088),
+    "5:4":  (1088, 896),
+}
+
+ASPECT_RATIOS_2K = {
+    "1:1":  (2048, 2048),
+    "4:3":  (2304, 1792),
+    "3:4":  (1792, 2304),
+    "3:2":  (2432, 1664),
+    "2:3":  (1664, 2432),
+    "16:9": (2688, 1536),
+    "9:16": (1536, 2688),
+    "21:9": (3072, 1280),
+    "9:21": (1280, 3072),
+    "4:5":  (1792, 2240),
+    "5:4":  (2240, 1792),
+}
+
 style_list = [
     {
         "name": "(No style)",
@@ -335,15 +363,15 @@ def change_model(model_choice):
         if model_choice == "Sana 1K (1024x1024)":
             config_path = "configs/sana_config/1024ms/Sana_1600M_img1024.yaml"
             model_path = "models/checkpoints/Sana_1600M_1024px.pth"
-            default_width = 1024
-            default_height = 1024
+            aspect_ratios = ASPECT_RATIOS
+            default_width, default_height = 1024, 1024
         elif model_choice == "Sana 2K (2048x2048)":
             config_path = "configs/sana_config/2048ms/Sana_1600M_img2048_bf16.yaml"
             model_path = "models/checkpoints/Sana_1600M_2Kpx_BF16.pth"
-            default_width = 2048
-            default_height = 2048
+            aspect_ratios = ASPECT_RATIOS_2K
+            default_width, default_height = 2048, 2048
         else:
-            return "Invalid model choice", default_width, default_height
+            return "Invalid model choice", gr.update(), gr.update(), gr.update()
 
         args.config = config_path
         args.model_path = model_path
@@ -369,14 +397,30 @@ def change_model(model_choice):
                 pipe.from_pretrained(args.model_path)
                 pipe.register_progress_bar(gr.Progress())
             except Exception as e:
-                return f"Error loading model: {str(e)}", default_width, default_height
+                return f"Error loading model: {str(e)}", gr.update(), gr.update(), gr.update()
 
-        return f"Using {model_choice} model", default_width, default_height
+        return (
+            f"Using {model_choice} model",
+            gr.update(choices=list(aspect_ratios.keys()), value=list(aspect_ratios.keys())[0]),
+            gr.update(value=default_width),
+            gr.update(value=default_height)
+        )
     else:
-        return f"Using {model_choice} model", default_width, default_height
+        return f"Using {model_choice} model", gr.update(), gr.update(), gr.update()
+
+def update_dimensions(aspect_ratio_key):
+    ratios = ASPECT_RATIOS if current_model_choice == "Sana 1K (1024x1024)" else ASPECT_RATIOS_2K
+    width, height = ratios[aspect_ratio_key]
+    return gr.update(value=width), gr.update(value=height)
+
+def update_aspect_ratio(width, height):
+    ratio = f"{width}:{height}"
+    ratios = ASPECT_RATIOS if current_model_choice == "Sana 1K (1024x1024)" else ASPECT_RATIOS_2K
+    closest_ratio = min(ratios.keys(), key=lambda x: abs(eval(x.replace(':', '/')) - width/height))
+    return gr.update(value=closest_ratio)
 
 title = f"""
-SANA APP V6 : Exclusive to SECourses : https://www.patreon.com/posts/116474081
+SANA APP V9 : Exclusive to SECourses : https://www.patreon.com/posts/116474081
 """
 
 examples = [
@@ -433,6 +477,11 @@ with gr.Blocks(css=css) as demo:
             with gr.Accordion("Advanced options", open=True):
                 with gr.Group():
                     with gr.Row():
+                        aspect_ratio = gr.Dropdown(
+                            label="Aspect Ratio",
+                            choices=list(ASPECT_RATIOS.keys()),
+                            value="1:1",
+                        )
                         width = gr.Slider(
                             label="Width",
                             minimum=256,
@@ -550,7 +599,25 @@ with gr.Blocks(css=css) as demo:
     model_choice.change(
         fn=change_model,
         inputs=[model_choice],
-        outputs=[model_info_box, width, height]
+        outputs=[model_info_box, aspect_ratio, width, height]
+    )
+
+    aspect_ratio.change(
+        fn=update_dimensions,
+        inputs=[aspect_ratio],
+        outputs=[width, height]
+    )
+
+    width.change(
+        fn=update_aspect_ratio,
+        inputs=[width, height],
+        outputs=[aspect_ratio]
+    )
+
+    height.change(
+        fn=update_aspect_ratio,
+        inputs=[width, height],
+        outputs=[aspect_ratio]
     )
 
     gr.on(
