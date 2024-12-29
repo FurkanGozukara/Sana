@@ -413,12 +413,6 @@ def update_dimensions(aspect_ratio_key):
     width, height = ratios[aspect_ratio_key]
     return gr.update(value=width), gr.update(value=height)
 
-def update_aspect_ratio(width, height):
-    ratio = f"{width}:{height}"
-    ratios = ASPECT_RATIOS if current_model_choice == "Sana 1K (1024x1024)" else ASPECT_RATIOS_2K
-    closest_ratio = min(ratios.keys(), key=lambda x: abs(eval(x.replace(':', '/')) - width/height))
-    return gr.update(value=closest_ratio)
-
 title = f"""
 SANA APP V9 : Exclusive to SECourses : https://www.patreon.com/posts/116474081
 """
@@ -606,18 +600,6 @@ with gr.Blocks(css=css) as demo:
         fn=update_dimensions,
         inputs=[aspect_ratio],
         outputs=[width, height]
-    )
-
-    width.change(
-        fn=update_aspect_ratio,
-        inputs=[width, height],
-        outputs=[aspect_ratio]
-    )
-
-    height.change(
-        fn=update_aspect_ratio,
-        inputs=[width, height],
-        outputs=[aspect_ratio]
     )
 
     gr.on(
