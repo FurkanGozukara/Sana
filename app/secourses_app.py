@@ -65,6 +65,20 @@ ASPECT_RATIOS_2K = {
     "5:4":  (2240, 1792),
 }
 
+ASPECT_RATIOS_4K = {
+    "1:1":  (4096, 4096),
+    "4:3":  (4608, 3584),
+    "3:4":  (3584, 4608),
+    "3:2":  (4864, 3328),
+    "2:3":  (3328, 4864),
+    "16:9": (5376, 3072),
+    "9:16": (3072, 5376),
+    "21:9": (6144, 2560),
+    "9:21": (2560, 6144),
+    "4:5":  (3584, 4480),
+    "5:4":  (4480, 3584),
+}
+
 style_list = [
     {
         "name": "(No style)",
@@ -223,12 +237,15 @@ def generate(
     global INFER_SPEED
     global pipe
 
-    # Load the model if it hasn't been loaded yet
+    # Load the model if it hasn't been loaded yet or if it has been unloaded
     if pipe is None:
         if torch.cuda.is_available():
-            pipe = SanaPipeline(args.config)
-            pipe.from_pretrained(args.model_path)
-            pipe.register_progress_bar(gr.Progress())
+            try:
+                pipe = SanaPipeline(args.config)
+                pipe.from_pretrained(args.model_path)
+                pipe.register_progress_bar(gr.Progress())
+            except Exception as e:
+                return [], seed, f"Error loading model: {str(e)}"
 
     seed = int(seed) if isinstance(seed, (int, float)) else 0
     seed = int(randomize_seed_fn(seed, randomize_seed))
@@ -370,12 +387,19 @@ def change_model(model_choice):
             model_path = "models/checkpoints/Sana_1600M_2Kpx_BF16.pth"
             aspect_ratios = ASPECT_RATIOS_2K
             default_width, default_height = 2048, 2048
+        elif model_choice == "Sana 4K (4096x4096)":
+            config_path = "configs/sana_config/4096ms/Sana_1600M_img4096_bf16.yaml"
+            model_path = "models/checkpoints/Sana_1600M_4Kpx_BF16.pth"
+            aspect_ratios = ASPECT_RATIOS_4K
+            default_width, default_height = 4096, 4096
+
+            # Update args for 4K model
+            args.config = config_path
+            args.model_path = model_path
+            args.image_size = default_width # Update image_size
         else:
             return "Invalid model choice", gr.update(), gr.update(), gr.update()
-
-        args.config = config_path
-        args.model_path = model_path
-
+        
         # Enhanced cleanup
         if torch.cuda.is_available():
             if pipe is not None:
@@ -388,10 +412,13 @@ def change_model(model_choice):
                     pipe.model = pipe.model.cpu()
                     del pipe.model
                 del pipe
+                pipe = None # Set pipe to None after cleanup
                 torch.cuda.empty_cache()
                 import gc
                 gc.collect()
 
+        # Load the model only if not already loaded
+        if pipe is None:
             try:
                 pipe = SanaPipeline(args.config)
                 pipe.from_pretrained(args.model_path)
@@ -409,12 +436,12 @@ def change_model(model_choice):
         return f"Using {model_choice} model", gr.update(), gr.update(), gr.update()
 
 def update_dimensions(aspect_ratio_key):
-    ratios = ASPECT_RATIOS if current_model_choice == "Sana 1K (1024x1024)" else ASPECT_RATIOS_2K
+    ratios = ASPECT_RATIOS if current_model_choice == "Sana 1K (1024x1024)" else (ASPECT_RATIOS_2K if current_model_choice == "Sana 2K (2048x2048)" else ASPECT_RATIOS_4K)
     width, height = ratios[aspect_ratio_key]
     return gr.update(value=width), gr.update(value=height)
 
 title = f"""
-SANA APP V9 : Exclusive to SECourses : https://www.patreon.com/posts/116474081
+SANA APP V10 : Exclusive to SECourses : https://www.patreon.com/posts/116474081
 """
 
 examples = [
@@ -445,7 +472,7 @@ with gr.Blocks(css=css) as demo:
     with gr.Row():
         with gr.Column(elem_id="model-selection"):
             model_choice = gr.Radio(
-                choices=["Sana 1K (1024x1024)", "Sana 2K (2048x2048)"],
+                choices=["Sana 1K (1024x1024)", "Sana 2K (2048x2048)", "Sana 4K (4096x4096)"],
                 label="Select Model",
                 value="Sana 1K (1024x1024)",
             )
