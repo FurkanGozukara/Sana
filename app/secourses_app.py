@@ -138,6 +138,19 @@ style_list = [
     },
 ]
 
+def load_model(config_path, model_path):
+    global pipe
+    if pipe is None:
+        if torch.cuda.is_available():
+            try:
+                pipe = SanaPipeline(config_path)
+                pipe.from_pretrained(model_path)
+                pipe.register_progress_bar(gr.Progress())
+                return True, "Model loaded successfully"
+            except Exception as e:
+                return False, f"Error loading model: {str(e)}"
+    return True, "Model already loaded"
+
 styles = {k["name"]: (k["prompt"], k["negative_prompt"]) for k in style_list}
 STYLE_NAMES = list(styles.keys())
 DEFAULT_STYLE_NAME = "(No style)"
@@ -237,15 +250,10 @@ def generate(
     global INFER_SPEED
     global pipe
 
-    # Load the model if it hasn't been loaded yet or if it has been unloaded
-    if pipe is None:
-        if torch.cuda.is_available():
-            try:
-                pipe = SanaPipeline(args.config)
-                pipe.from_pretrained(args.model_path)
-                pipe.register_progress_bar(gr.Progress())
-            except Exception as e:
-                return [], seed, f"Error loading model: {str(e)}"
+    # Use centralized loading
+    success, message = load_model(args.config, args.model_path)
+    if not success:
+        return [], seed, message
 
     seed = int(seed) if isinstance(seed, (int, float)) else 0
     seed = int(randomize_seed_fn(seed, randomize_seed))
@@ -377,7 +385,7 @@ def change_model(model_choice):
     if current_model_choice != model_choice:
         current_model_choice = model_choice
 
-        # Set appropriate paths and dimensions based on model choice
+        # Set appropriate paths and dimensions
         if model_choice == "Sana 1K (1024x1024)":
             config_path = "configs/sana_config/1024ms/Sana_1600M_img1024.yaml"
             model_path = "models/checkpoints/Sana_1600M_1024px.pth"
@@ -396,7 +404,7 @@ def change_model(model_choice):
         else:
             return "Invalid model choice", gr.update(), gr.update(), gr.update()
         
-        # Update args for all model choices
+        # Update args
         args.config = config_path
         args.model_path = model_path
         args.image_size = default_width
@@ -404,28 +412,22 @@ def change_model(model_choice):
         # Enhanced cleanup
         if torch.cuda.is_available():
             if pipe is not None:
-                # Explicitly cleanup VAE
                 if hasattr(pipe, 'vae'):
                     pipe.vae = pipe.vae.cpu()
                     del pipe.vae
-                # Explicitly cleanup model
                 if hasattr(pipe, 'model'):
                     pipe.model = pipe.model.cpu()
                     del pipe.model
                 del pipe
-                pipe = None  # Set pipe to None after cleanup
+                pipe = None
                 torch.cuda.empty_cache()
                 import gc
                 gc.collect()
 
-        # Load the new model
-        if pipe is None:
-            try:
-                pipe = SanaPipeline(args.config)
-                pipe.from_pretrained(args.model_path)
-                pipe.register_progress_bar(gr.Progress())
-            except Exception as e:
-                return f"Error loading model: {str(e)}", gr.update(), gr.update(), gr.update()
+        # Use centralized loading
+        success, message = load_model(config_path, model_path)
+        if not success:
+            return message, gr.update(), gr.update(), gr.update()
 
         return (
             f"Using {model_choice} model",
@@ -442,7 +444,7 @@ def update_dimensions(aspect_ratio_key):
     return gr.update(value=width), gr.update(value=height)
 
 title = f"""
-SANA APP V11 : Exclusive to SECourses : https://www.patreon.com/posts/116474081
+SANA APP V12 : Exclusive to SECourses : https://www.patreon.com/posts/116474081
 """
 
 examples = [
