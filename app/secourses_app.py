@@ -377,6 +377,7 @@ def change_model(model_choice):
     if current_model_choice != model_choice:
         current_model_choice = model_choice
 
+        # Set appropriate paths and dimensions based on model choice
         if model_choice == "Sana 1K (1024x1024)":
             config_path = "configs/sana_config/1024ms/Sana_1600M_img1024.yaml"
             model_path = "models/checkpoints/Sana_1600M_1024px.pth"
@@ -392,13 +393,13 @@ def change_model(model_choice):
             model_path = "models/checkpoints/Sana_1600M_4Kpx_BF16.pth"
             aspect_ratios = ASPECT_RATIOS_4K
             default_width, default_height = 4096, 4096
-
-            # Update args for 4K model
-            args.config = config_path
-            args.model_path = model_path
-            args.image_size = default_width # Update image_size
         else:
             return "Invalid model choice", gr.update(), gr.update(), gr.update()
+        
+        # Update args for all model choices
+        args.config = config_path
+        args.model_path = model_path
+        args.image_size = default_width
         
         # Enhanced cleanup
         if torch.cuda.is_available():
@@ -412,12 +413,12 @@ def change_model(model_choice):
                     pipe.model = pipe.model.cpu()
                     del pipe.model
                 del pipe
-                pipe = None # Set pipe to None after cleanup
+                pipe = None  # Set pipe to None after cleanup
                 torch.cuda.empty_cache()
                 import gc
                 gc.collect()
 
-        # Load the model only if not already loaded
+        # Load the new model
         if pipe is None:
             try:
                 pipe = SanaPipeline(args.config)
@@ -441,7 +442,7 @@ def update_dimensions(aspect_ratio_key):
     return gr.update(value=width), gr.update(value=height)
 
 title = f"""
-SANA APP V10 : Exclusive to SECourses : https://www.patreon.com/posts/116474081
+SANA APP V11 : Exclusive to SECourses : https://www.patreon.com/posts/116474081
 """
 
 examples = [
