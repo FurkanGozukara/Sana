@@ -550,12 +550,7 @@ with gr.Blocks(css=css) as demo:
                         value=1,
                     )
 
-            with gr.Accordion("VRAM Optimizations", open=False):
-                enable_vae_tiling = gr.Checkbox(label="Enable VAE Tiling", value=True)
-                enable_vae_slicing = gr.Checkbox(label="Enable VAE Slicing", value=False)
-                enable_model_cpu_offload = gr.Checkbox(label="Enable Model CPU Offload", value=False)
-                enable_sequential_cpu_offload = gr.Checkbox(label="Enable Sequential CPU Offload", value=False)
-                tile_sample_min_size = gr.Slider(label="Tile Sample Min Size", minimum=448, maximum=2048, step=64, value=1024)
+
 
         with gr.Column():
             result = gr.Gallery(label="Result", show_label=False, elem_id="gallery")
@@ -563,6 +558,12 @@ with gr.Blocks(css=css) as demo:
             status_box = gr.Markdown(value="")
             progress_bar = gr.Progress()
             btn_open_outputs = gr.Button("Open Outputs Folder")
+            with gr.Accordion("VRAM Optimizations", open=True):
+                enable_vae_tiling = gr.Checkbox(label="Enable VAE Tiling", value=True)
+                enable_vae_slicing = gr.Checkbox(label="Enable VAE Slicing", value=False)
+                enable_model_cpu_offload = gr.Checkbox(label="Enable Model CPU Offload", value=False)
+                enable_sequential_cpu_offload = gr.Checkbox(label="Enable Sequential CPU Offload", value=False)
+                tile_sample_min_size = gr.Slider(label="Tile Sample Min Size", minimum=448, maximum=2048, step=64, value=1024)            
 
     model_choice.change(
         fn=change_model,
