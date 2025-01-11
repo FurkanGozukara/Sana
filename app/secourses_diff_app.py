@@ -144,6 +144,18 @@ def get_args():
 
 args = get_args()
 
+def clear_gpu_memory():
+    global pipe
+    if pipe is not None:
+        try:
+            del pipe
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+        except Exception as e:
+            print(f"Error clearing GPU memory: {e}")
+    pipe = None
+
 def load_model(model_choice):
     global pipe
     model_paths = {
@@ -155,6 +167,9 @@ def load_model(model_choice):
     
     if model_path:
         if pipe is None or pipe.model_path != model_path:
+            # Clear previous model from VRAM
+            clear_gpu_memory()
+            
             if torch.cuda.is_available():
                 try:
                     pipe = SanaPipeline.from_pretrained(
@@ -220,8 +235,20 @@ def save_image(img, seed="", save_img=True):
 
 def randomize_seed_fn(seed: int, randomize_seed: bool) -> int:
     if randomize_seed:
-        seed = random.randint(0, MAX_SEED)
-    return seed
+        return random.randint(0, MAX_SEED)
+    # Handle different seed input types
+    if isinstance(seed, list):
+        seed = seed[0] if seed else 0
+    elif isinstance(seed, (str, float)):
+        try:
+            seed = int(float(seed))
+        except (ValueError, TypeError):
+            seed = 0
+    elif seed is None:
+        seed = 0
+    # Ensure seed is within valid range
+    return max(0, min(int(seed), MAX_SEED))
+
 
 @torch.no_grad()
 def generate(
@@ -245,42 +272,53 @@ def generate(
 ):
     global pipe, INFER_SPEED
 
-    if pipe is None or pipe.model_path != model_choice:
-        success, message = load_model(model_choice)
-        if not success:
-            return [], 0, f"Error: {message}"
+    try:
+        if pipe is None or pipe.model_path != model_choice:
+            success, message = load_model(model_choice)
+            if not success:
+                return [], 0, f"Error: {message}"
 
-    pipe.vae.to(torch.float32)
-    if not use_negative_prompt:
-        negative_prompt = None
+        pipe.vae.to(torch.float32)
+        if not use_negative_prompt:
+            negative_prompt = None
 
-    prompt, negative_prompt = apply_style(style, prompt, negative_prompt)
+        prompt, negative_prompt = apply_style(style, prompt, negative_prompt)
 
-    apply_vram_optimizations(enable_vae_tiling, enable_vae_slicing, enable_model_cpu_offload, enable_sequential_cpu_offload, tile_sample_min_size)
+        apply_vram_optimizations(enable_vae_tiling, enable_vae_slicing, enable_model_cpu_offload, enable_sequential_cpu_offload, tile_sample_min_size)
 
-    seed = randomize_seed_fn(seed, randomize_seed)
-    generator = torch.Generator(device=device).manual_seed(seed)
+        # Handle seed
+        current_seed = randomize_seed_fn(seed, randomize_seed)
+        try:
+            generator = torch.Generator(device=device).manual_seed(current_seed)
+        except Exception as e:
+            print(f"Error setting seed: {e}")
+            current_seed = 0
+            generator = torch.Generator(device=device).manual_seed(current_seed)
 
-    time_start = time.time()
-    images = pipe(
-        prompt=prompt,
-        negative_prompt=negative_prompt,
-        height=height,
-        width=width,
-        guidance_scale=guidance_scale,
-        num_inference_steps=num_inference_steps,
-        num_images_per_prompt=num_imgs,
-        generator=generator,
-    ).images
-    INFER_SPEED = (time.time() - time_start) / num_imgs
+        time_start = time.time()
+        images = pipe(
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            height=height,
+            width=width,
+            guidance_scale=guidance_scale,
+            num_inference_steps=num_inference_steps,
+            num_images_per_prompt=num_imgs,
+            generator=generator,
+        ).images
+        INFER_SPEED = (time.time() - time_start) / num_imgs
 
-    saved_images = [save_image(img, f"{seed}_{i}") for i, img in enumerate(images)]
+        saved_images = [save_image(img, f"{current_seed}_{i}") for i, img in enumerate(images)]
 
-    return (
-        saved_images,
-        seed,
-        f"<span style='font-size: 16px; font-weight: bold;'>Inference Speed: {INFER_SPEED:.3f} s/Img</span>",
-    )
+        return (
+            saved_images,
+            current_seed,
+            f"<span style='font-size: 16px; font-weight: bold;'>Inference Speed: {INFER_SPEED:.3f} s/Img</span>",
+        )
+    except Exception as e:
+        # Clear memory if there's an error
+        clear_gpu_memory()
+        return [], 0, f"Error during generation: {str(e)}"
 
 def generate_multiple(
     model_choice: str,
@@ -389,7 +427,7 @@ def open_folder():
     else:  # macOS and other Unix
         os.system(f'open "{open_folder_path}"')
 
-title = "SANA APP V13 : Exclusive to SECourses : https://www.patreon.com/posts/116474081"
+title = "SANA APP V14 : Exclusive to SECourses : https://www.patreon.com/posts/116474081"
 
 examples = [
     'a cyberpunk cat with a neon sign that says "Sana"',
