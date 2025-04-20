@@ -427,7 +427,7 @@ def open_folder():
     else:  # macOS and other Unix
         os.system(f'open "{open_folder_path}"')
 
-title = "SANA APP V14 : Exclusive to SECourses : https://www.patreon.com/posts/116474081"
+title = "SANA APP V17 : Exclusive to SECourses : https://www.patreon.com/posts/116474081"
 
 examples = [
     'a cyberpunk cat with a neon sign that says "Sana"',
